@@ -1,5 +1,7 @@
-import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import Navbar from '../components/Navbar';
+import HomeLoader from '../components/HomeLoader';
 
 interface Product {
   id: number;
@@ -17,13 +19,56 @@ interface Category {
   name: string;
 }
 
+const VALID_SORT = ['', 'asc', 'desc', 'name'] as const;
+
+function parseCategoriesParam(value: string | null): number[] {
+  if (!value) return [];
+  return value
+    .split(',')
+    .map(s => parseInt(s.trim(), 10))
+    .filter(n => !Number.isNaN(n) && n > 0);
+}
+
+function parseSortParam(value: string | null): string {
+  if (!value || !VALID_SORT.includes(value as (typeof VALID_SORT)[number])) return '';
+  return value;
+}
+
+function sortProducts<T extends { price: number; title: string }>(list: T[], order: string): T[] {
+  if (!order) return list;
+  const copy = [...list];
+  if (order === 'asc') return copy.sort((a, b) => a.price - b.price);
+  if (order === 'desc') return copy.sort((a, b) => b.price - a.price);
+  if (order === 'name') return copy.sort((a, b) => a.title.localeCompare(b.title));
+  return copy;
+}
+
 export default function Home() {
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
-  const [selectedCategories, setSelectedCategories] = useState<number[]>([]);
-  const [sortOrder, setSortOrder] = useState('');
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  const categoriesParam = searchParams.get('categories') ?? '';
+  const sortOrder = parseSortParam(searchParams.get('sort'));
+  const selectedCategories = useMemo(
+    () => parseCategoriesParam(categoriesParam || null),
+    [categoriesParam]
+  );
+
+  const updateFilters = useCallback(
+    (categories: number[], sort: string) => {
+      const next = new URLSearchParams();
+      if (categories.length > 0) next.set('categories', categories.join(','));
+      if (sort) next.set('sort', sort);
+      const nextStr = next.toString();
+      const currentStr = searchParams.toString();
+      if (nextStr === currentStr) return;
+      setSearchParams(next, { replace: false });
+    },
+    [searchParams, setSearchParams]
+  );
 
   useEffect(() => {
     fetch('https://api.escuelajs.co/api/v1/categories')
@@ -35,81 +80,82 @@ export default function Home() {
       .catch(err => console.log('category fetch error', err));
   }, []);
 
+  const fetchIdRef = useRef(0);
+
   useEffect(() => {
+    const fetchId = ++fetchIdRef.current;
+    const controller = new AbortController();
     setLoading(true);
 
-    let url = 'https://api.escuelajs.co/api/v1/products?limit=40&offset=0';
+    const url = 'https://api.escuelajs.co/api/v1/products?limit=40&offset=0';
+
+    const finish = (list: Product[]) => {
+      if (fetchId !== fetchIdRef.current) return;
+      setProducts(list);
+      setLoading(false);
+    };
+
+    const fail = () => {
+      if (fetchId !== fetchIdRef.current) return;
+      setLoading(false);
+    };
 
     if (selectedCategories.length > 0) {
       const fetchPromises = selectedCategories.map(catId =>
-        fetch(`https://api.escuelajs.co/api/v1/categories/${catId}/products?limit=20&offset=0`)
-          .then(r => r.json())
+        fetch(`https://api.escuelajs.co/api/v1/categories/${catId}/products?limit=20&offset=0`, {
+          signal: controller.signal,
+        }).then(r => r.json())
       );
 
-      Promise.all(fetchPromises).then(results => {
-        let merged: Product[] = [];
-        results.forEach(r => {
-          merged = [...merged, ...r];
-        });
-
-        const unique = merged.filter((p, idx, arr) => arr.findIndex(x => x.id === p.id) === idx);
-        const sorted = sortProducts(unique, sortOrder);
-        console.log('products fetched by category', sorted);
-        setProducts(sorted);
-        setLoading(false);
-      }).catch(err => {
-        console.log('fetch error', err);
-        setLoading(false);
-      });
-    } else {
-      fetch(url)
-        .then(res => res.json())
-        .then(data => {
-          const sorted = sortProducts(data, sortOrder);
-          console.log('all products fetched', sorted);
-          setProducts(sorted);
-          setLoading(false);
+      Promise.all(fetchPromises)
+        .then(results => {
+          let merged: Product[] = [];
+          results.forEach(r => {
+            merged = [...merged, ...r];
+          });
+          const unique = merged.filter(
+            (p, idx, arr) => arr.findIndex(x => x.id === p.id) === idx
+          );
+          finish(unique);
         })
         .catch(err => {
+          if (err instanceof Error && err.name === 'AbortError') return;
           console.log('fetch error', err);
-          setLoading(false);
+          fail();
+        });
+    } else {
+      fetch(url, { signal: controller.signal })
+        .then(res => res.json())
+        .then(data => finish(data))
+        .catch(err => {
+          if (err instanceof Error && err.name === 'AbortError') return;
+          console.log('fetch error', err);
+          fail();
         });
     }
-  }, [selectedCategories, sortOrder]);
 
-  function sortProducts(list: Product[], order: string) {
-    if (!order) return list;
-    const copy = [...list];
-    if (order === 'asc') return copy.sort((a, b) => a.price - b.price);
-    if (order === 'desc') return copy.sort((a, b) => b.price - a.price);
-    if (order === 'name') return copy.sort((a, b) => a.title.localeCompare(b.title));
-    return copy;
-  }
+    return () => controller.abort();
+  }, [categoriesParam]);
+
+  const displayProducts = useMemo(
+    () => sortProducts(products, sortOrder),
+    [products, sortOrder]
+  );
 
   function toggleCategory(id: number) {
-    setSelectedCategories(prev => {
-      if (prev.includes(id)) return prev.filter(c => c !== id);
-      return [...prev, id];
-    });
+    const next = selectedCategories.includes(id)
+      ? selectedCategories.filter(c => c !== id)
+      : [...selectedCategories, id];
+    updateFilters(next, sortOrder);
+  }
+
+  function setSortOrder(order: string) {
+    updateFilters(selectedCategories, order);
   }
 
   return (
     <div style={{ minHeight: '100vh', backgroundColor: '#f5f5f5', paddingBottom: '80px' }}>
-      <header style={{
-        backgroundColor: '#1a1a2e',
-        color: 'white',
-        padding: '16px 24px',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        position: 'sticky',
-        top: 0,
-        zIndex: 100,
-        boxShadow: '0 2px 8px rgba(0,0,0,0.3)'
-      }}>
-        <h1 style={{ margin: 0, fontSize: '22px', fontWeight: 700, letterSpacing: '1px' }}>ShopZone</h1>
-        <span style={{ fontSize: '14px', color: '#ccc' }}>Browse Products</span>
-      </header>
+      <Navbar subtitle="Browse Products" />
 
       <div style={{ display: 'flex', gap: '24px', padding: '24px', maxWidth: '1400px', margin: '0 auto' }}>
         <aside style={{
@@ -187,18 +233,10 @@ export default function Home() {
           )}
 
           {loading ? (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '20px' }}>
-              {[1,2,3,4,5,6,7,8].map(n => (
-                <div key={n} style={{ backgroundColor: 'white', borderRadius: '10px', padding: '16px', height: '280px', animation: 'pulse 1.5s ease-in-out infinite' }}>
-                  <div style={{ backgroundColor: '#eee', height: '160px', borderRadius: '8px', marginBottom: '12px' }}></div>
-                  <div style={{ backgroundColor: '#eee', height: '16px', borderRadius: '4px', marginBottom: '8px' }}></div>
-                  <div style={{ backgroundColor: '#eee', height: '14px', borderRadius: '4px', width: '60%' }}></div>
-                </div>
-              ))}
-            </div>
+            <HomeLoader />
           ) : (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '20px' }}>
-              {products.map(product => (
+              {displayProducts.map(product => (
                 <div
                   key={product.id}
                   onClick={() => navigate(`/product/${product.id}/details`)}
@@ -246,7 +284,7 @@ export default function Home() {
             </div>
           )}
 
-          {!loading && products.length === 0 && (
+          {!loading && displayProducts.length === 0 && (
             <div style={{ textAlign: 'center', padding: '60px', color: '#666' }}>
               <p style={{ fontSize: '18px' }}>No products found</p>
             </div>

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useCart } from '../context/CartContext';
+import Navbar from '../components/Navbar';
 
 interface Product {
   id: number;
@@ -80,38 +81,7 @@ export default function ProductDetail() {
 
   return (
     <div style={{ minHeight: '100vh', backgroundColor: '#f5f5f5', paddingBottom: '80px' }}>
-      <header style={{
-        backgroundColor: '#1a1a2e',
-        color: 'white',
-        padding: '16px 24px',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        position: 'sticky',
-        top: 0,
-        zIndex: 100,
-        boxShadow: '0 2px 8px rgba(0,0,0,0.3)'
-      }}>
-        <button
-          onClick={() => navigate('/')}
-          style={{
-            background: 'none',
-            border: '1px solid rgba(255,255,255,0.3)',
-            color: 'white',
-            padding: '8px 16px',
-            borderRadius: '6px',
-            cursor: 'pointer',
-            fontSize: '14px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '6px'
-          }}
-        >
-          &larr; Back to Home
-        </button>
-        <h1 style={{ margin: 0, fontSize: '22px', fontWeight: 700 }}>ShopZone</h1>
-        <div style={{ width: '120px' }}></div>
-      </header>
+      <Navbar subtitle="Product Details" />
 
       <div style={{ maxWidth: '1000px', margin: '32px auto', padding: '0 24px' }}>
         <div style={{ backgroundColor: 'white', borderRadius: '12px', overflow: 'hidden', boxShadow: '0 4px 16px rgba(0,0,0,0.1)', display: 'flex', gap: '0', flexWrap: 'wrap' }}>
